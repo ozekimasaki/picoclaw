@@ -203,6 +203,7 @@ type ChannelsConfig struct {
 	OneBot   OneBotConfig   `json:"onebot"`
 	WeCom    WeComConfig    `json:"wecom"`
 	WeComApp WeComAppConfig `json:"wecom_app"`
+	YouTube  YouTubeConfig  `json:"youtube"`
 }
 
 type WhatsAppConfig struct {
@@ -305,6 +306,17 @@ type WeComAppConfig struct {
 	WebhookPath    string              `json:"webhook_path"     env:"PICOCLAW_CHANNELS_WECOM_APP_WEBHOOK_PATH"`
 	AllowFrom      FlexibleStringSlice `json:"allow_from"       env:"PICOCLAW_CHANNELS_WECOM_APP_ALLOW_FROM"`
 	ReplyTimeout   int                 `json:"reply_timeout"    env:"PICOCLAW_CHANNELS_WECOM_APP_REPLY_TIMEOUT"`
+}
+
+type YouTubeConfig struct {
+	Enabled             bool                `json:"enabled"                env:"PICOCLAW_CHANNELS_YOUTUBE_ENABLED"`
+	APIKey              string              `json:"api_key"               env:"PICOCLAW_CHANNELS_YOUTUBE_API_KEY"`
+	VideoID             string              `json:"video_id"              env:"PICOCLAW_CHANNELS_YOUTUBE_VIDEO_ID"`
+	PollIntervalSeconds int                 `json:"poll_interval_seconds" env:"PICOCLAW_CHANNELS_YOUTUBE_POLL_INTERVAL_SECONDS"`
+	ForwardChannel      string              `json:"forward_channel"       env:"PICOCLAW_CHANNELS_YOUTUBE_FORWARD_CHANNEL"`
+	ForwardChatID       string              `json:"forward_chat_id"       env:"PICOCLAW_CHANNELS_YOUTUBE_FORWARD_CHAT_ID"`
+	MessageFormat       string              `json:"message_format"        env:"PICOCLAW_CHANNELS_YOUTUBE_MESSAGE_FORMAT"`
+	AllowFrom           FlexibleStringSlice `json:"allow_from"            env:"PICOCLAW_CHANNELS_YOUTUBE_ALLOW_FROM"`
 }
 
 type HeartbeatConfig struct {

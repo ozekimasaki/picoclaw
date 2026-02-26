@@ -139,6 +139,16 @@
       "webhook_path": "/webhook/wecom-app",
       "allow_from": [],
       "reply_timeout": 5
+    },
+    "youtube": {
+      "enabled": false,
+      "api_key": "YOUR_YOUTUBE_API_KEY",
+      "video_id": "",
+      "poll_interval_seconds": 20,
+      "forward_channel": "discord",
+      "forward_chat_id": "",
+      "message_format": "[YT] {author}: {message}",
+      "allow_from": []
     }
   },
   "providers": {

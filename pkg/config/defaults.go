@@ -113,6 +113,16 @@ func DefaultConfig() *Config {
 				AllowFrom:      FlexibleStringSlice{},
 				ReplyTimeout:   5,
 			},
+			YouTube: YouTubeConfig{
+				Enabled:             false,
+				APIKey:              "",
+				VideoID:             "",
+				PollIntervalSeconds: 20,
+				ForwardChannel:      "",
+				ForwardChatID:       "",
+				MessageFormat:       "[YT] {author}: {message}",
+				AllowFrom:           FlexibleStringSlice{},
+			},
 		},
 		Providers: ProvidersConfig{
 			OpenAI: OpenAIProviderConfig{WebSearch: true},
