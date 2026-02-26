@@ -204,6 +204,7 @@ type ChannelsConfig struct {
 	WeCom    WeComConfig    `json:"wecom"`
 	WeComApp WeComAppConfig `json:"wecom_app"`
 	YouTube  YouTubeConfig  `json:"youtube"`
+	AITuber  AITuberConfig  `json:"aituber"`
 }
 
 type WhatsAppConfig struct {
@@ -317,6 +318,22 @@ type YouTubeConfig struct {
 	ForwardChatID       string              `json:"forward_chat_id"       env:"PICOCLAW_CHANNELS_YOUTUBE_FORWARD_CHAT_ID"`
 	MessageFormat       string              `json:"message_format"        env:"PICOCLAW_CHANNELS_YOUTUBE_MESSAGE_FORMAT"`
 	AllowFrom           FlexibleStringSlice `json:"allow_from"            env:"PICOCLAW_CHANNELS_YOUTUBE_ALLOW_FROM"`
+	NGWords             []string            `json:"ng_words"              env:"PICOCLAW_CHANNELS_YOUTUBE_NG_WORDS"`
+	MinMessageLength    int                 `json:"min_message_length"    env:"PICOCLAW_CHANNELS_YOUTUBE_MIN_MESSAGE_LENGTH"`
+	MaxRepeatRatio      float64             `json:"max_repeat_ratio"      env:"PICOCLAW_CHANNELS_YOUTUBE_MAX_REPEAT_RATIO"`
+	BlockURLs           bool                `json:"block_urls"            env:"PICOCLAW_CHANNELS_YOUTUBE_BLOCK_URLS"`
+	MaxCommentsPerPoll  int                 `json:"max_comments_per_poll" env:"PICOCLAW_CHANNELS_YOUTUBE_MAX_COMMENTS_PER_POLL"`
+	SelectionStrategy   string              `json:"selection_strategy"    env:"PICOCLAW_CHANNELS_YOUTUBE_SELECTION_STRATEGY"`
+	BatchComments       bool                `json:"batch_comments"        env:"PICOCLAW_CHANNELS_YOUTUBE_BATCH_COMMENTS"`
+}
+
+type AITuberConfig struct {
+	Enabled        bool   `json:"enabled"         env:"PICOCLAW_CHANNELS_AITUBER_ENABLED"`
+	WSHost         string `json:"ws_host"         env:"PICOCLAW_CHANNELS_AITUBER_WS_HOST"`
+	WSPort         int    `json:"ws_port"         env:"PICOCLAW_CHANNELS_AITUBER_WS_PORT"`
+	WSPath         string `json:"ws_path"         env:"PICOCLAW_CHANNELS_AITUBER_WS_PATH"`
+	DefaultEmotion string `json:"default_emotion" env:"PICOCLAW_CHANNELS_AITUBER_DEFAULT_EMOTION"`
+	MaxQueueSize   int    `json:"max_queue_size"  env:"PICOCLAW_CHANNELS_AITUBER_MAX_QUEUE_SIZE"`
 }
 
 type HeartbeatConfig struct {

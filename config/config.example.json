@@ -145,10 +145,26 @@
       "api_key": "YOUR_YOUTUBE_API_KEY",
       "video_id": "",
       "poll_interval_seconds": 20,
-      "forward_channel": "discord",
-      "forward_chat_id": "",
+      "forward_channel": "aituber",
+      "forward_chat_id": "default",
       "message_format": "[YT] {author}: {message}",
-      "allow_from": []
+      "allow_from": [],
+      "ng_words": [],
+      "min_message_length": 0,
+      "max_repeat_ratio": 0.0,
+      "block_urls": false,
+      "max_comments_per_poll": 3,
+      "selection_strategy": "latest",
+      "batch_comments": false
+    },
+    "aituber": {
+      "_comment": "AITuber Kit WebSocket server. AITuber Kit connects as client in external linkage mode.",
+      "enabled": false,
+      "ws_host": "0.0.0.0",
+      "ws_port": 8000,
+      "ws_path": "/ws",
+      "default_emotion": "neutral",
+      "max_queue_size": 10
     }
   },
   "providers": {
