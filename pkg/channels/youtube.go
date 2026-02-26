@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
+
 	"net/http"
 	"strings"
 	"time"
@@ -36,12 +38,12 @@ type youtubeVideoItem struct {
 }
 
 type youtubeLiveChatResponse struct {
-	NextPageToken       string                   `json:"nextPageToken"`
-	PollingIntervalMs   int                      `json:"pollingIntervalMillis"`
-	Items               []youtubeLiveChatMessage `json:"items"`
-	OfflineAt           string                   `json:"offlineAt,omitempty"`
-	PageInfo            youtubePageInfo          `json:"pageInfo"`
-	Error               *youtubeAPIError         `json:"error,omitempty"`
+	NextPageToken     string                   `json:"nextPageToken"`
+	PollingIntervalMs int                      `json:"pollingIntervalMillis"`
+	Items             []youtubeLiveChatMessage `json:"items"`
+	OfflineAt         string                   `json:"offlineAt,omitempty"`
+	PageInfo          youtubePageInfo          `json:"pageInfo"`
+	Error             *youtubeAPIError         `json:"error,omitempty"`
 }
 
 type youtubePageInfo struct {
@@ -52,20 +54,20 @@ type youtubePageInfo struct {
 type youtubeLiveChatMessage struct {
 	ID      string `json:"id"`
 	Snippet struct {
-		Type                    string `json:"type"`
-		LiveChatID              string `json:"liveChatId"`
-		AuthorChannelID         string `json:"authorChannelId"`
-		PublishedAt             string `json:"publishedAt"`
-		HasDisplayContent       bool   `json:"hasDisplayContent"`
-		DisplayMessage          string `json:"displayMessage"`
-		TextMessageDetails      *struct {
+		Type               string `json:"type"`
+		LiveChatID         string `json:"liveChatId"`
+		AuthorChannelID    string `json:"authorChannelId"`
+		PublishedAt        string `json:"publishedAt"`
+		HasDisplayContent  bool   `json:"hasDisplayContent"`
+		DisplayMessage     string `json:"displayMessage"`
+		TextMessageDetails *struct {
 			MessageText string `json:"messageText"`
 		} `json:"textMessageDetails,omitempty"`
-		SuperChatDetails        *struct {
-			AmountMicros         string `json:"amountMicros"`
-			Currency             string `json:"currency"`
-			AmountDisplayString  string `json:"amountDisplayString"`
-			UserComment          string `json:"userComment"`
+		SuperChatDetails *struct {
+			AmountMicros        string `json:"amountMicros"`
+			Currency            string `json:"currency"`
+			AmountDisplayString string `json:"amountDisplayString"`
+			UserComment         string `json:"userComment"`
 		} `json:"superChatDetails,omitempty"`
 	} `json:"snippet"`
 	AuthorDetails struct {
@@ -219,9 +221,16 @@ func (c *YouTubeChannel) pollOnce() {
 		}
 	}
 
-	// Process new messages
-	for _, item := range resp.Items {
-		c.processMessage(item)
+	// Filter and process new messages
+	filtered := c.preFilter(resp.Items)
+	selected := c.selectComments(filtered)
+
+	if c.config.BatchComments && len(selected) > 1 {
+		c.batchAndHandle(selected)
+	} else {
+		for _, item := range selected {
+			c.processMessage(item)
+		}
 	}
 }
 
@@ -378,4 +387,137 @@ func (c *YouTubeChannel) fetchLiveChatMessages() (*youtubeLiveChatResponse, erro
 	}
 
 	return &chatResp, nil
+}
+
+// preFilter removes low-quality messages based on configured rules.
+// Uses strings.Contains instead of regex for RPi ARM CPU optimization.
+func (c *YouTubeChannel) preFilter(items []youtubeLiveChatMessage) []youtubeLiveChatMessage {
+	if len(c.config.NGWords) == 0 && c.config.MinMessageLength == 0 &&
+		c.config.MaxRepeatRatio == 0 && !c.config.BlockURLs {
+		return items
+	}
+
+	filtered := make([]youtubeLiveChatMessage, 0, len(items))
+	for _, item := range items {
+		text := item.Snippet.DisplayMessage
+		if item.Snippet.TextMessageDetails != nil {
+			text = item.Snippet.TextMessageDetails.MessageText
+		}
+		if text == "" {
+			continue
+		}
+
+		if c.shouldFilter(text) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func (c *YouTubeChannel) shouldFilter(text string) bool {
+	lower := strings.ToLower(text)
+
+	for _, ng := range c.config.NGWords {
+		if strings.Contains(lower, strings.ToLower(ng)) {
+			return true
+		}
+	}
+
+	if c.config.MinMessageLength > 0 {
+		if len([]rune(text)) < c.config.MinMessageLength {
+			return true
+		}
+	}
+
+	if c.config.BlockURLs {
+		if strings.Contains(text, "http://") || strings.Contains(text, "https://") {
+			return true
+		}
+	}
+
+	if c.config.MaxRepeatRatio > 0 {
+		runes := []rune(text)
+		if len(runes) > 0 {
+			freq := make(map[rune]int)
+			for _, r := range runes {
+				freq[r]++
+			}
+			maxCount := 0
+			for _, count := range freq {
+				if count > maxCount {
+					maxCount = count
+				}
+			}
+			if float64(maxCount)/float64(len(runes)) > c.config.MaxRepeatRatio {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// selectComments picks up to MaxCommentsPerPoll messages using the configured strategy.
+func (c *YouTubeChannel) selectComments(msgs []youtubeLiveChatMessage) []youtubeLiveChatMessage {
+	max := c.config.MaxCommentsPerPoll
+	if max <= 0 || len(msgs) <= max {
+		return msgs
+	}
+
+	switch c.config.SelectionStrategy {
+	case "priority":
+		prioritized := make([]youtubeLiveChatMessage, 0, len(msgs))
+		normal := make([]youtubeLiveChatMessage, 0, len(msgs))
+		for _, m := range msgs {
+			if m.Snippet.SuperChatDetails != nil ||
+				m.AuthorDetails.IsChatOwner ||
+				m.AuthorDetails.IsChatModerator {
+				prioritized = append(prioritized, m)
+			} else {
+				normal = append(normal, m)
+			}
+		}
+		result := append(prioritized, normal...)
+		if len(result) > max {
+			result = result[:max]
+		}
+		return result
+	case "random":
+		shuffled := make([]youtubeLiveChatMessage, len(msgs))
+		copy(shuffled, msgs)
+		for i := len(shuffled) - 1; i > 0; i-- {
+			j := rand.IntN(i + 1)
+			shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+		}
+		return shuffled[:max]
+	default: // "latest"
+		return msgs[len(msgs)-max:]
+	}
+}
+
+// batchAndHandle combines multiple messages into a single batched inbound message.
+// Uses bus.PublishInbound directly to bypass allowList check (preFiltered messages are safe).
+func (c *YouTubeChannel) batchAndHandle(msgs []youtubeLiveChatMessage) {
+	var sb strings.Builder
+	sb.WriteString("[YouTube コメントまとめ]\n")
+	for _, m := range msgs {
+		author := m.AuthorDetails.DisplayName
+		text := m.Snippet.DisplayMessage
+		if m.Snippet.TextMessageDetails != nil {
+			text = m.Snippet.TextMessageDetails.MessageText
+		}
+		fmt.Fprintf(&sb, "%s: %s\n", author, text)
+	}
+	sb.WriteString("---\n上記のコメントにまとめて応答してください。")
+
+	c.bus.PublishInbound(bus.InboundMessage{
+		Channel:  "youtube",
+		SenderID: "youtube-batch",
+		ChatID:   c.liveChatID,
+		Content:  sb.String(),
+		Metadata: map[string]string{
+			"batch_size": fmt.Sprintf("%d", len(msgs)),
+		},
+	})
 }
