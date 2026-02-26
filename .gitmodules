@@ -1,0 +1,3 @@
+[submodule "aituber-kit"]
+	path = aituber-kit
+	url = https://github.com/tegnike/aituber-kit.git
