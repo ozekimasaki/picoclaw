@@ -202,6 +202,19 @@ func (m *Manager) initChannels() error {
 		}
 	}
 
+	if m.config.Channels.YouTube.Enabled && m.config.Channels.YouTube.APIKey != "" {
+		logger.DebugC("channels", "Attempting to initialize YouTube channel")
+		youtube, err := NewYouTubeChannel(m.config.Channels.YouTube, m.bus)
+		if err != nil {
+			logger.ErrorCF("channels", "Failed to initialize YouTube channel", map[string]any{
+				"error": err.Error(),
+			})
+		} else {
+			m.channels["youtube"] = youtube
+			logger.InfoC("channels", "YouTube channel enabled successfully")
+		}
+	}
+
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{
 		"enabled_channels": len(m.channels),
 	})
