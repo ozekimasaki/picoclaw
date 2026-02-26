@@ -215,6 +215,19 @@ func (m *Manager) initChannels() error {
 		}
 	}
 
+	if m.config.Channels.AITuber.Enabled {
+		logger.DebugC("channels", "Attempting to initialize AITuber channel")
+		aituber, err := NewAITuberChannel(m.config.Channels.AITuber, m.bus)
+		if err != nil {
+			logger.ErrorCF("channels", "Failed to initialize AITuber channel", map[string]any{
+				"error": err.Error(),
+			})
+		} else {
+			m.channels["aituber"] = aituber
+			logger.InfoC("channels", "AITuber channel enabled successfully")
+		}
+	}
+
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{
 		"enabled_channels": len(m.channels),
 	})
