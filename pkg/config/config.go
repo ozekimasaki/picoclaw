@@ -312,6 +312,7 @@ type WeComAppConfig struct {
 type YouTubeConfig struct {
 	Enabled             bool                `json:"enabled"                env:"PICOCLAW_CHANNELS_YOUTUBE_ENABLED"`
 	APIKey              string              `json:"api_key"               env:"PICOCLAW_CHANNELS_YOUTUBE_API_KEY"`
+	ChannelID           string              `json:"channel_id"            env:"PICOCLAW_CHANNELS_YOUTUBE_CHANNEL_ID"`
 	VideoID             string              `json:"video_id"              env:"PICOCLAW_CHANNELS_YOUTUBE_VIDEO_ID"`
 	PollIntervalSeconds int                 `json:"poll_interval_seconds" env:"PICOCLAW_CHANNELS_YOUTUBE_POLL_INTERVAL_SECONDS"`
 	ForwardChannel      string              `json:"forward_channel"       env:"PICOCLAW_CHANNELS_YOUTUBE_FORWARD_CHANNEL"`

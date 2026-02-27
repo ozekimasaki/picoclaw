@@ -10,7 +10,8 @@ YouTube Live Chat のコメントをリアルタイムで取得し、別のチ�
     "youtube": {
       "enabled": true,
       "api_key": "YOUR_YOUTUBE_API_KEY",
-      "video_id": "xxxxxxxxxx",
+      "channel_id": "UCxxxxxxxxxxxxxxxxxx",
+      "video_id": "",
       "poll_interval_seconds": 30,
       "forward_channel": "discord",
       "forward_chat_id": "123456789",
@@ -21,11 +22,16 @@ YouTube Live Chat のコメントをリアルタイムで取得し、別のチ�
 }
 ```
 
+> **推奨**: `channel_id` を設定すれば `video_id` は空でOKです。PicoClaw が自動的にアクティブなライブ配信を検出し、配信終了→新配信開始時にも自動再接続します。
+
 | フィールド | 型 | 必須 | デフォルト | 説明 |
 |---|---|---|---|---|
 | enabled | bool | ○ | false | YouTube チャネルの有効/無効 |
 | api_key | string | ○ | - | YouTube Data API v3 キー |
-| video_id | string | ○ | - | 監視対象ライブ配信の動画ID |
+| channel_id | string | △ | - | YouTube チャンネルID（`UC...`）。自動配信検出に使用 |
+| video_id | string | △ | - | 監視対象ライブ配信の動画ID |
+
+> `channel_id` と `video_id` のどちらか一方は必須です。両方設定した場合は `video_id` が優先されます。
 | poll_interval_seconds | int | - | 20 | ポーリング間隔（秒）。最小5秒 |
 | forward_channel | string | ○ | - | 転送先チャネル名（`discord`, `telegram` 等） |
 | forward_chat_id | string | ○ | - | 転送先のチャット/チャンネルID |
@@ -53,7 +59,22 @@ YouTube Live Chat のコメントをリアルタイムで取得し、別のチ�
 4. 「API の制限」で「YouTube Data API v3」のみを選択（推奨）
 5. キーをコピー
 
-### 4. 動画IDの確認
+### 4. チャンネルID または動画IDの設定
+
+**方法A: チャンネルID（推奨）** — 自動配信検出が有効になります
+
+チャンネルページの URL からチャンネルIDを取得します:
+
+```
+https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxx
+                                ^^^^^^^^^^^^^^^^^^^^
+                                この部分が channel_id
+```
+
+`channel_id` を設定すると、PicoClaw が自動的にアクティブなライブ配信を検出します。
+配信が終了しても、次の配信を60秒間隔で自動検索・再接続します。
+
+**方法B: 動画ID** — 特定の配信のみ監視する場合
 
 YouTube ライブ配信の URL から動画IDを取得します:
 
@@ -106,6 +127,7 @@ API キーが正しく設定されているか確認してください。
 
 - `video_id` が正しいか確認
 - 配信が開始されているか確認（予約配信の場合、配信開始前は接続できません）
+- `channel_id` を使用している場合、配信が開始されるまで60秒間隔で自動リトライします
 
 ### アクセス拒否 (403)
 
@@ -128,3 +150,17 @@ API キーが正しく設定されているか確認してください。
 例:
 - `[YT] {author}: {message}` → `[YT] UserName: こんにちは！`
 - `YouTube | {author} said: {message}` → `YouTube | UserName said: こんにちは！`
+
+## 自動配信検出
+
+`channel_id` を設定すると、以下の動作が有効になります:
+
+1. **起動時**: YouTube Data API `search.list` でチャンネルのアクティブな配信を自動検出
+2. **配信終了時**: 自動的に新しい配信を60秒間隔で検索・再接続
+3. **配信未開始**: バックグラウンドで配信開始を待機
+
+### API クォータへの影響
+
+- `search.list` は **100 クォータ/回** を消費します
+- 通常は起動時と配信切り替え時のみ呼ばれるため、1日数回程度です
+- 配信待機中は60秒間隔でリトライ: 1時間 = 60回 = 6,000 クォータ

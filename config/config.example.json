@@ -143,6 +143,7 @@
     "youtube": {
       "enabled": false,
       "api_key": "YOUR_YOUTUBE_API_KEY",
+      "channel_id": "",
       "video_id": "",
       "poll_interval_seconds": 20,
       "forward_channel": "aituber",

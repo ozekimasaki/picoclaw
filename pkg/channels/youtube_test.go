@@ -1,6 +1,7 @@
 package channels
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -41,14 +42,29 @@ func TestNewYouTubeChannel(t *testing.T) {
 		}
 	})
 
-	t.Run("missing video_id", func(t *testing.T) {
+	t.Run("missing video_id and channel_id", func(t *testing.T) {
 		cfg := config.YouTubeConfig{
 			Enabled: true,
 			APIKey:  "test-api-key",
 		}
 		_, err := NewYouTubeChannel(cfg, msgBus)
 		if err == nil {
-			t.Fatal("expected error for missing video_id")
+			t.Fatal("expected error for missing video_id and channel_id")
+		}
+	})
+
+	t.Run("channel_id only is valid", func(t *testing.T) {
+		cfg := config.YouTubeConfig{
+			Enabled:   true,
+			APIKey:    "test-api-key",
+			ChannelID: "UCxxxxxxxxxxxxxxxxxx",
+		}
+		ch, err := NewYouTubeChannel(cfg, msgBus)
+		if err != nil {
+			t.Fatalf("expected no error with channel_id only, got: %v", err)
+		}
+		if ch.config.ChannelID != "UCxxxxxxxxxxxxxxxxxx" {
+			t.Errorf("expected channel_id 'UCxxxxxxxxxxxxxxxxxx', got '%s'", ch.config.ChannelID)
 		}
 	})
 
@@ -131,7 +147,7 @@ func TestYouTubeChannel_Send(t *testing.T) {
 		ch, _ := NewYouTubeChannel(cfg, msgBus)
 
 		// Send a message — it should be forwarded via bus
-		err := ch.Send(nil, bus.OutboundMessage{
+		err := ch.Send(context.TODO(), bus.OutboundMessage{
 			Channel: "youtube",
 			ChatID:  "livechat123",
 			Content: "Hello from AI",
@@ -149,7 +165,7 @@ func TestYouTubeChannel_Send(t *testing.T) {
 		}
 		ch, _ := NewYouTubeChannel(cfg, msgBus)
 
-		err := ch.Send(nil, bus.OutboundMessage{
+		err := ch.Send(context.TODO(), bus.OutboundMessage{
 			Channel: "youtube",
 			Content: "Hello",
 		})
@@ -269,4 +285,49 @@ func TestParseLiveChatResponse(t *testing.T) {
 	if item.Snippet.TextMessageDetails == nil || item.Snippet.TextMessageDetails.MessageText != "Hello!" {
 		t.Error("expected textMessageDetails.messageText to be 'Hello!'")
 	}
+}
+
+func TestYouTubeChannel_HandleAPIError(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	cfg := config.YouTubeConfig{
+		Enabled: true,
+		APIKey:  "key",
+		VideoID: "vid",
+	}
+	ch, _ := NewYouTubeChannel(cfg, msgBus)
+
+	t.Run("403 no longer live returns true", func(t *testing.T) {
+		err := &youtubeAPIError{Code: 403, Message: "The live chat is no longer live."}
+		if !ch.handleAPIError(err) {
+			t.Error("expected handleAPIError to return true for 'no longer live'")
+		}
+	})
+
+	t.Run("403 liveChatEnded returns true", func(t *testing.T) {
+		err := &youtubeAPIError{Code: 403, Message: "liveChatEnded"}
+		if !ch.handleAPIError(err) {
+			t.Error("expected handleAPIError to return true for 'liveChatEnded'")
+		}
+	})
+
+	t.Run("404 returns true", func(t *testing.T) {
+		err := &youtubeAPIError{Code: 404, Message: "not found"}
+		if !ch.handleAPIError(err) {
+			t.Error("expected handleAPIError to return true for 404")
+		}
+	})
+
+	t.Run("403 quota exceeded returns false", func(t *testing.T) {
+		err := &youtubeAPIError{Code: 403, Message: "quotaExceeded"}
+		if ch.handleAPIError(err) {
+			t.Error("expected handleAPIError to return false for quotaExceeded")
+		}
+	})
+
+	t.Run("401 returns false", func(t *testing.T) {
+		err := &youtubeAPIError{Code: 401, Message: "unauthorized"}
+		if ch.handleAPIError(err) {
+			t.Error("expected handleAPIError to return false for 401")
+		}
+	})
 }

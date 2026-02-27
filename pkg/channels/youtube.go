@@ -23,6 +23,7 @@ const (
 	youtubeRetryWaitSeconds     = 60
 	youtubeHTTPTimeoutSeconds   = 10
 	youtubeDefaultMessageFormat = "[YT] {author}: {message}"
+	youtubeReconnectInterval    = 60 * time.Second
 )
 
 // YouTube Data API v3 response structures
@@ -86,22 +87,36 @@ type youtubeAPIError struct {
 	Message string `json:"message"`
 }
 
+type youtubeSearchResponse struct {
+	Items []youtubeSearchItem `json:"items"`
+}
+
+type youtubeSearchItem struct {
+	ID struct {
+		VideoID string `json:"videoId"`
+	} `json:"id"`
+	Snippet struct {
+		Title string `json:"title"`
+	} `json:"snippet"`
+}
+
 // YouTubeChannel implements the Channel interface for YouTube Live Chat.
 type YouTubeChannel struct {
 	*BaseChannel
-	config        config.YouTubeConfig
-	httpClient    *http.Client
-	liveChatID    string
-	nextPageToken string
-	cancel        context.CancelFunc
+	config          config.YouTubeConfig
+	httpClient      *http.Client
+	liveChatID      string
+	nextPageToken   string
+	cancel          context.CancelFunc
+	reconnectCancel context.CancelFunc
 }
 
 func NewYouTubeChannel(cfg config.YouTubeConfig, msgBus *bus.MessageBus) (*YouTubeChannel, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("youtube: api_key is required")
 	}
-	if cfg.VideoID == "" {
-		return nil, fmt.Errorf("youtube: video_id is required")
+	if cfg.VideoID == "" && cfg.ChannelID == "" {
+		return nil, fmt.Errorf("youtube: either video_id or channel_id is required")
 	}
 
 	pollInterval := cfg.PollIntervalSeconds
@@ -128,6 +143,27 @@ func NewYouTubeChannel(cfg config.YouTubeConfig, msgBus *bus.MessageBus) (*YouTu
 }
 
 func (c *YouTubeChannel) Start(ctx context.Context) error {
+	// If video_id is empty, resolve it from channel_id
+	if c.config.VideoID == "" && c.config.ChannelID != "" {
+		videoID, err := c.resolveVideoID()
+		if err != nil {
+			logger.WarnCF("youtube", "No active live stream found, will retry in background", map[string]any{
+				"channel_id": c.config.ChannelID,
+				"error":      err.Error(),
+			})
+			// Start reconnect loop to wait for a live stream
+			reconnectCtx, reconnectCancel := context.WithCancel(ctx)
+			c.reconnectCancel = reconnectCancel
+			go c.reconnectLoop(reconnectCtx)
+			return nil
+		}
+		c.config.VideoID = videoID
+	}
+
+	return c.connectToLiveChat(ctx)
+}
+
+func (c *YouTubeChannel) connectToLiveChat(ctx context.Context) error {
 	liveChatID, err := c.fetchActiveLiveChatID()
 	if err != nil {
 		return fmt.Errorf("youtube: failed to get live chat ID: %w", err)
@@ -136,6 +172,7 @@ func (c *YouTubeChannel) Start(ctx context.Context) error {
 		return fmt.Errorf("youtube: video %s is not currently live streaming", c.config.VideoID)
 	}
 	c.liveChatID = liveChatID
+	c.nextPageToken = ""
 	logger.InfoCF("youtube", "Connected to live chat", map[string]any{
 		"video_id":     c.config.VideoID,
 		"live_chat_id": liveChatID,
@@ -151,12 +188,191 @@ func (c *YouTubeChannel) Start(ctx context.Context) error {
 }
 
 func (c *YouTubeChannel) Stop(ctx context.Context) error {
+	if c.reconnectCancel != nil {
+		c.reconnectCancel()
+		c.reconnectCancel = nil
+	}
 	if c.cancel != nil {
 		c.cancel()
 	}
 	c.setRunning(false)
 	logger.InfoC("youtube", "YouTube channel stopped")
 	return nil
+}
+
+// resolveVideoID searches for an active live stream on the configured channel.
+// Strategy: first try search.list with eventType=live (fast but may be cached),
+// then fall back to searching recent videos and checking their liveStreamingDetails.
+func (c *YouTubeChannel) resolveVideoID() (string, error) {
+	// Strategy 1: search.list with eventType=live (may be cached by YouTube CDN)
+	videoID, err := c.searchLiveStream()
+	if err == nil {
+		return videoID, nil
+	}
+	logger.DebugCF("youtube", "search.list eventType=live returned no results, trying fallback", map[string]any{
+		"channel_id": c.config.ChannelID,
+	})
+
+	// Strategy 2: get recent videos and check if any are currently live
+	return c.searchRecentVideosForLive()
+}
+
+// searchLiveStream uses search.list with eventType=live filter.
+func (c *YouTubeChannel) searchLiveStream() (string, error) {
+	url := fmt.Sprintf("%s/search?part=id,snippet&channelId=%s&eventType=live&type=video&key=%s",
+		youtubeAPIBase, c.config.ChannelID, c.config.APIKey)
+
+	resp, err := c.httpClient.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("YouTube API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var searchResp youtubeSearchResponse
+	if err := json.Unmarshal(body, &searchResp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(searchResp.Items) == 0 {
+		return "", fmt.Errorf("no results")
+	}
+
+	videoID := searchResp.Items[0].ID.VideoID
+	title := searchResp.Items[0].Snippet.Title
+	logger.InfoCF("youtube", "Auto-detected live stream (search)", map[string]any{
+		"channel_id": c.config.ChannelID,
+		"video_id":   videoID,
+		"title":      title,
+	})
+	return videoID, nil
+}
+
+// searchRecentVideosForLive fetches recent videos from the channel and checks
+// each one for an active live chat via videos.list. This avoids the search.list
+// eventType=live cache delay issue.
+func (c *YouTubeChannel) searchRecentVideosForLive() (string, error) {
+	// Get recent videos (order=date, no eventType filter — not cached as heavily)
+	url := fmt.Sprintf("%s/search?part=id&channelId=%s&type=video&order=date&maxResults=5&key=%s",
+		youtubeAPIBase, c.config.ChannelID, c.config.APIKey)
+
+	resp, err := c.httpClient.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("YouTube API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var searchResp youtubeSearchResponse
+	if err := json.Unmarshal(body, &searchResp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(searchResp.Items) == 0 {
+		return "", fmt.Errorf("no videos found for channel %s", c.config.ChannelID)
+	}
+
+	// Collect video IDs and batch-check via videos.list (1 quota unit)
+	var ids []string
+	for _, item := range searchResp.Items {
+		ids = append(ids, item.ID.VideoID)
+	}
+
+	videosURL := fmt.Sprintf("%s/videos?part=liveStreamingDetails,snippet&id=%s&key=%s",
+		youtubeAPIBase, strings.Join(ids, ","), c.config.APIKey)
+
+	vResp, err := c.httpClient.Get(videosURL)
+	if err != nil {
+		return "", fmt.Errorf("videos.list request failed: %w", err)
+	}
+	defer vResp.Body.Close()
+
+	vBody, err := io.ReadAll(vResp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read videos response: %w", err)
+	}
+
+	var videosResp struct {
+		Items []struct {
+			ID      string `json:"id"`
+			Snippet struct {
+				Title                string `json:"title"`
+				LiveBroadcastContent string `json:"liveBroadcastContent"`
+			} `json:"snippet"`
+			LiveStreamingDetails struct {
+				ActiveLiveChatID string `json:"activeLiveChatId"`
+			} `json:"liveStreamingDetails"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(vBody, &videosResp); err != nil {
+		return "", fmt.Errorf("failed to parse videos response: %w", err)
+	}
+
+	for _, v := range videosResp.Items {
+		if v.LiveStreamingDetails.ActiveLiveChatID != "" {
+			logger.InfoCF("youtube", "Auto-detected live stream (fallback)", map[string]any{
+				"channel_id": c.config.ChannelID,
+				"video_id":   v.ID,
+				"title":      v.Snippet.Title,
+			})
+			return v.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("no active live stream found for channel %s", c.config.ChannelID)
+}
+
+// reconnectLoop periodically searches for a new live stream when the current one ends.
+func (c *YouTubeChannel) reconnectLoop(ctx context.Context) {
+	ticker := time.NewTicker(youtubeReconnectInterval)
+	defer ticker.Stop()
+
+	logger.InfoCF("youtube", "Waiting for live stream", map[string]any{
+		"channel_id":     c.config.ChannelID,
+		"retry_interval": youtubeReconnectInterval.String(),
+	})
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.InfoC("youtube", "Reconnect loop stopped")
+			return
+		case <-ticker.C:
+			videoID, err := c.resolveVideoID()
+			if err != nil {
+				logger.DebugCF("youtube", "No live stream yet", map[string]any{
+					"channel_id": c.config.ChannelID,
+				})
+				continue
+			}
+			c.config.VideoID = videoID
+			if err := c.connectToLiveChat(ctx); err != nil {
+				logger.ErrorCF("youtube", "Failed to connect to new live stream", map[string]any{
+					"video_id": videoID,
+					"error":    err.Error(),
+				})
+				continue
+			}
+			// Successfully connected, stop reconnect loop
+			return
+		}
+	}
 }
 
 func (c *YouTubeChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
@@ -178,7 +394,10 @@ func (c *YouTubeChannel) pollLoop(ctx context.Context) {
 	defer ticker.Stop()
 
 	// Do an initial poll immediately
-	c.pollOnce()
+	if streamEnded := c.pollOnce(); streamEnded {
+		c.onStreamEnded(ctx)
+		return
+	}
 
 	for {
 		select {
@@ -186,23 +405,40 @@ func (c *YouTubeChannel) pollLoop(ctx context.Context) {
 			logger.InfoC("youtube", "Poll loop stopped (context cancelled)")
 			return
 		case <-ticker.C:
-			c.pollOnce()
+			if streamEnded := c.pollOnce(); streamEnded {
+				c.onStreamEnded(ctx)
+				return
+			}
 		}
 	}
 }
 
-func (c *YouTubeChannel) pollOnce() {
+// onStreamEnded handles the transition when a live stream ends.
+// If channel_id is configured, it starts the reconnect loop to find the next stream.
+func (c *YouTubeChannel) onStreamEnded(ctx context.Context) {
+	c.setRunning(false)
+	if c.config.ChannelID != "" {
+		logger.InfoCF("youtube", "Stream ended, will search for new stream", map[string]any{
+			"channel_id": c.config.ChannelID,
+		})
+		c.config.VideoID = ""
+		go c.reconnectLoop(ctx)
+	} else {
+		logger.WarnC("youtube", "Stream ended. Set channel_id in config to enable auto-reconnect.")
+	}
+}
+
+func (c *YouTubeChannel) pollOnce() bool {
 	resp, err := c.fetchLiveChatMessages()
 	if err != nil {
 		logger.ErrorCF("youtube", "Failed to fetch live chat messages", map[string]any{
 			"error": err.Error(),
 		})
-		return
+		return false
 	}
 
 	if resp.Error != nil {
-		c.handleAPIError(resp.Error)
-		return
+		return c.handleAPIError(resp.Error)
 	}
 
 	// Update page token for next poll
@@ -232,6 +468,7 @@ func (c *YouTubeChannel) pollOnce() {
 			c.processMessage(item)
 		}
 	}
+	return false
 }
 
 func (c *YouTubeChannel) processMessage(msg youtubeLiveChatMessage) {
@@ -283,7 +520,8 @@ func (c *YouTubeChannel) formatMessage(author, message string) string {
 	return formatted
 }
 
-func (c *YouTubeChannel) handleAPIError(apiErr *youtubeAPIError) {
+// handleAPIError logs the error and returns true if the stream has ended (triggering reconnect).
+func (c *YouTubeChannel) handleAPIError(apiErr *youtubeAPIError) bool {
 	switch apiErr.Code {
 	case 401:
 		logger.ErrorCF("youtube", "Authentication failed. Check your API key.", map[string]any{
@@ -301,22 +539,29 @@ func (c *YouTubeChannel) handleAPIError(apiErr *youtubeAPIError) {
 				"code":    apiErr.Code,
 				"message": apiErr.Message,
 			})
+		} else if strings.Contains(apiErr.Message, "no longer live") || strings.Contains(apiErr.Message, "liveChatEnded") {
+			logger.WarnCF("youtube", "Live stream has ended", map[string]any{
+				"message": apiErr.Message,
+			})
+			return true
 		} else {
 			logger.ErrorCF("youtube", "API error (403)", map[string]any{
 				"message": apiErr.Message,
 			})
 		}
 	case 404:
-		logger.ErrorCF("youtube", "Live chat not found. The stream may have ended.", map[string]any{
+		logger.WarnCF("youtube", "Live chat not found. The stream may have ended.", map[string]any{
 			"code":    apiErr.Code,
 			"message": apiErr.Message,
 		})
+		return true
 	default:
 		logger.ErrorCF("youtube", "YouTube API error", map[string]any{
 			"code":    apiErr.Code,
 			"message": apiErr.Message,
 		})
 	}
+	return false
 }
 
 // fetchActiveLiveChatID retrieves the activeLiveChatId from a video's liveStreamingDetails.
