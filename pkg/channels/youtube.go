@@ -245,7 +245,7 @@ func (c *YouTubeChannel) connectToLiveChat(ctx context.Context) error {
 
 		pollCtx, cancel := context.WithCancel(ctx)
 		c.cancel = cancel
-		c.setRunning(true)
+		c.SetRunning(true)
 
 		go c.innerTubePollLoop(pollCtx)
 		if c.liveChatID != "" && c.config.SuperchatPollSeconds > 0 {
@@ -281,7 +281,7 @@ func (c *YouTubeChannel) connectToLiveChat(ctx context.Context) error {
 
 	pollCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
-	c.setRunning(true)
+	c.SetRunning(true)
 
 	go c.pollLoop(pollCtx)
 	if c.config.AccumulateComments {
@@ -299,7 +299,7 @@ func (c *YouTubeChannel) Stop(ctx context.Context) error {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	c.setRunning(false)
+	c.SetRunning(false)
 	logger.InfoC("youtube", "YouTube channel stopped")
 	return nil
 }
@@ -611,7 +611,7 @@ func (c *YouTubeChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 		logger.WarnC("youtube", "No forward channel configured, dropping response")
 		return nil
 	}
-	c.bus.PublishOutbound(bus.OutboundMessage{
+	c.bus.PublishOutbound(ctx, bus.OutboundMessage{
 		Channel: c.config.ForwardChannel,
 		ChatID:  c.config.ForwardChatID,
 		Content: msg.Content,
@@ -653,7 +653,7 @@ func (c *YouTubeChannel) onStreamEnded(ctx context.Context) {
 		c.cancel()
 		c.cancel = nil
 	}
-	c.setRunning(false)
+	c.SetRunning(false)
 	if c.config.ChannelID != "" {
 		logger.InfoCF("youtube", "Stream ended, will search for new stream", map[string]any{
 			"channel_id": c.config.ChannelID,
@@ -755,7 +755,7 @@ func (c *YouTubeChannel) processMessage(msg youtubeLiveChatMessage) {
 	}
 
 	// Use authorChannelID as senderID, liveChatID as chatID
-	c.HandleMessage(authorChannelID, c.liveChatID, formatted, nil, metadata)
+	c.HandleMessage(context.Background(), bus.Peer{}, "", authorChannelID, c.liveChatID, formatted, nil, metadata)
 }
 
 func (c *YouTubeChannel) formatMessage(author, message string) string {
@@ -1001,7 +1001,7 @@ func (c *YouTubeChannel) batchAndHandle(msgs []youtubeLiveChatMessage) {
 	}
 	sb.WriteString("---\n上記のコメントにまとめて応答してください。")
 
-	c.bus.PublishInbound(bus.InboundMessage{
+	c.bus.PublishInbound(context.Background(), bus.InboundMessage{
 		Channel:  "youtube",
 		SenderID: "youtube-batch",
 		ChatID:   c.liveChatID,
@@ -1292,7 +1292,7 @@ func (c *YouTubeChannel) fallbackToDataAPI(ctx context.Context) {
 
 	pollCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
-	c.setRunning(true)
+	c.SetRunning(true)
 	c.nextPageToken = ""
 
 	go c.pollLoop(pollCtx)

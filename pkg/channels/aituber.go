@@ -92,7 +92,7 @@ func (c *AITuberChannel) Start(ctx context.Context) error {
 		Handler: mux,
 	}
 
-	c.setRunning(true)
+	c.SetRunning(true)
 	logger.InfoCF("aituber", "AITuber channel started", map[string]any{
 		"address": addr,
 		"path":    wsPath,
@@ -131,7 +131,7 @@ func (c *AITuberChannel) Stop(ctx context.Context) error {
 	}
 	c.clientsMu.Unlock()
 
-	c.setRunning(false)
+	c.SetRunning(false)
 	logger.InfoC("aituber", "AITuber channel stopped")
 	return nil
 }
