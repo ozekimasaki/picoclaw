@@ -3,8 +3,11 @@ package channels
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 
+	YtChat "github.com/epjane/youtube-live-chat-downloader/v2"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
@@ -31,14 +34,27 @@ func TestNewYouTubeChannel(t *testing.T) {
 		}
 	})
 
-	t.Run("missing api_key", func(t *testing.T) {
+	t.Run("missing api_key with data_api mode", func(t *testing.T) {
 		cfg := config.YouTubeConfig{
-			Enabled: true,
-			VideoID: "test-video-id",
+			Enabled:    true,
+			VideoID:    "test-video-id",
+			ChatSource: "data_api",
 		}
 		_, err := NewYouTubeChannel(cfg, msgBus)
 		if err == nil {
-			t.Fatal("expected error for missing api_key")
+			t.Fatal("expected error for missing api_key in data_api mode")
+		}
+	})
+
+	t.Run("missing api_key with innertube mode is OK", func(t *testing.T) {
+		cfg := config.YouTubeConfig{
+			Enabled:    true,
+			VideoID:    "test-video-id",
+			ChatSource: "innertube",
+		}
+		_, err := NewYouTubeChannel(cfg, msgBus)
+		if err != nil {
+			t.Fatalf("expected no error for innertube mode without api_key, got: %v", err)
 		}
 	})
 
@@ -330,4 +346,249 @@ func TestYouTubeChannel_HandleAPIError(t *testing.T) {
 			t.Error("expected handleAPIError to return false for 401")
 		}
 	})
+}
+
+// makeTestMessages creates youtubeLiveChatMessage slice for testing.
+func makeTestMessages(texts, authors []string) []youtubeLiveChatMessage {
+	msgs := make([]youtubeLiveChatMessage, len(texts))
+	for i := range texts {
+		msgs[i].Snippet.DisplayMessage = texts[i]
+		if i < len(authors) {
+			msgs[i].AuthorDetails.DisplayName = authors[i]
+			msgs[i].AuthorDetails.ChannelID = "UC" + authors[i]
+		}
+	}
+	return msgs
+}
+
+func TestAccumulator_AppendAndFlush(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	cfg := config.YouTubeConfig{
+		Enabled:              true,
+		APIKey:               "key",
+		VideoID:              "vid",
+		AccumulateComments:   true,
+		MinAccumulateSeconds: 3,
+		MaxAccumulateSeconds: 30,
+		MaxCommentsPerPoll:   5,
+		SelectionStrategy:    "latest",
+		ForwardChannel:       "aituber",
+		ForwardChatID:        "default",
+		MessageFormat:        "[YT] {author}: {message}",
+	}
+	ch, err := NewYouTubeChannel(cfg, msgBus)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ch.liveChatID = "test-chat"
+
+	msgs := makeTestMessages([]string{"hello", "world", "test"}, []string{"UserA", "UserB", "UserC"})
+
+	ch.appendToBuffer(msgs)
+
+	ch.bufferMu.Lock()
+	if len(ch.commentBuffer) != 3 {
+		t.Errorf("expected 3 buffered comments, got %d", len(ch.commentBuffer))
+	}
+	ch.bufferMu.Unlock()
+
+	// Flush should process all buffered comments
+	ch.flushCommentBuffer()
+
+	ch.bufferMu.Lock()
+	if len(ch.commentBuffer) != 0 {
+		t.Errorf("expected empty buffer after flush, got %d", len(ch.commentBuffer))
+	}
+	ch.bufferMu.Unlock()
+}
+
+func TestAccumulator_SingleComment(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	cfg := config.YouTubeConfig{
+		Enabled:              true,
+		APIKey:               "key",
+		VideoID:              "vid",
+		AccumulateComments:   true,
+		MinAccumulateSeconds: 3,
+		MaxAccumulateSeconds: 30,
+		MaxCommentsPerPoll:   5,
+		SelectionStrategy:    "latest",
+		ForwardChannel:       "aituber",
+		ForwardChatID:        "default",
+		MessageFormat:        "[YT] {author}: {message}",
+	}
+	ch, err := NewYouTubeChannel(cfg, msgBus)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ch.liveChatID = "test-chat"
+
+	// Buffer a single comment
+	msgs := makeTestMessages([]string{"solo"}, []string{"UserA"})
+	ch.appendToBuffer(msgs)
+
+	// Flush — single comment should use processMessage (not batchAndHandle)
+	ch.flushCommentBuffer()
+
+	ch.bufferMu.Lock()
+	if len(ch.commentBuffer) != 0 {
+		t.Errorf("expected empty buffer after flush, got %d", len(ch.commentBuffer))
+	}
+	ch.bufferMu.Unlock()
+}
+
+func TestAccumulator_DiscardOnStreamEnd(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	cfg := config.YouTubeConfig{
+		Enabled:              true,
+		APIKey:               "key",
+		VideoID:              "vid",
+		AccumulateComments:   true,
+		MinAccumulateSeconds: 3,
+		MaxAccumulateSeconds: 30,
+	}
+	ch, err := NewYouTubeChannel(cfg, msgBus)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	msgs := makeTestMessages([]string{"hello"}, []string{"UserA"})
+	ch.appendToBuffer(msgs)
+
+	ch.discardBuffer()
+
+	ch.bufferMu.Lock()
+	if len(ch.commentBuffer) != 0 {
+		t.Errorf("expected empty buffer after discard, got %d", len(ch.commentBuffer))
+	}
+	ch.bufferMu.Unlock()
+}
+
+func TestAccumulator_DisabledByDefault(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	cfg := config.YouTubeConfig{
+		Enabled: true,
+		APIKey:  "key",
+		VideoID: "vid",
+	}
+	ch, err := NewYouTubeChannel(cfg, msgBus)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ch.config.AccumulateComments {
+		t.Error("expected AccumulateComments to be false by default")
+	}
+	if ch.commentNotify != nil {
+		t.Error("expected commentNotify to be nil when accumulate is disabled")
+	}
+}
+
+func TestAccumulator_DefaultsApplied(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	cfg := config.YouTubeConfig{
+		Enabled:            true,
+		APIKey:             "key",
+		VideoID:            "vid",
+		AccumulateComments: true,
+	}
+	ch, err := NewYouTubeChannel(cfg, msgBus)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ch.config.MinAccumulateSeconds != youtubeDefaultMinAccumulate {
+		t.Errorf("expected MinAccumulateSeconds=%d, got %d", youtubeDefaultMinAccumulate, ch.config.MinAccumulateSeconds)
+	}
+	if ch.config.MaxAccumulateSeconds != youtubeDefaultMaxAccumulate {
+		t.Errorf("expected MaxAccumulateSeconds=%d, got %d", youtubeDefaultMaxAccumulate, ch.config.MaxAccumulateSeconds)
+	}
+	if ch.commentNotify == nil {
+		t.Error("expected commentNotify to be initialized when accumulate is enabled")
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// InnerTube hybrid tests
+// ─────────────────────────────────────────────────────────────
+
+func TestConvertInnerTubeMessages(t *testing.T) {
+	now := time.Now()
+	input := []YtChat.ChatMessage{
+		{AuthorName: "User1", Message: "Hello", Timestamp: now},
+		{AuthorName: "User2", Message: "", Timestamp: now},
+		{AuthorName: "User3", Message: "World", Timestamp: now},
+	}
+	result := convertInnerTubeMessages(input)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages (empty filtered), got %d", len(result))
+	}
+
+	if result[0].AuthorDetails.DisplayName != "User1" {
+		t.Errorf("expected author 'User1', got '%s'", result[0].AuthorDetails.DisplayName)
+	}
+	if result[0].Snippet.Type != "textMessageEvent" {
+		t.Errorf("expected type 'textMessageEvent', got '%s'", result[0].Snippet.Type)
+	}
+	if result[0].Snippet.DisplayMessage != "Hello" {
+		t.Errorf("expected message 'Hello', got '%s'", result[0].Snippet.DisplayMessage)
+	}
+	if result[0].Snippet.TextMessageDetails == nil || result[0].Snippet.TextMessageDetails.MessageText != "Hello" {
+		t.Error("expected TextMessageDetails.MessageText to be 'Hello'")
+	}
+	if result[0].Snippet.PublishedAt != now.Format(time.RFC3339) {
+		t.Errorf("expected PublishedAt '%s', got '%s'", now.Format(time.RFC3339), result[0].Snippet.PublishedAt)
+	}
+
+	if result[1].AuthorDetails.DisplayName != "User3" {
+		t.Errorf("expected second author 'User3', got '%s'", result[1].AuthorDetails.DisplayName)
+	}
+}
+
+func TestConvertInnerTubeMessages_Empty(t *testing.T) {
+	result := convertInnerTubeMessages(nil)
+	if len(result) != 0 {
+		t.Errorf("expected 0 messages for nil input, got %d", len(result))
+	}
+
+	result = convertInnerTubeMessages([]YtChat.ChatMessage{})
+	if len(result) != 0 {
+		t.Errorf("expected 0 messages for empty input, got %d", len(result))
+	}
+}
+
+func TestFetchInnerTubeChat_ContextCancel(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	cfg := config.YouTubeConfig{
+		Enabled:    true,
+		VideoID:    "test-video-id",
+		ChatSource: "innertube",
+	}
+	ch, err := NewYouTubeChannel(cfg, msgBus)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err = ch.fetchInnerTubeChat(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+}
+
+func TestNewYouTubeChannel_ChatSourceDefault(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	cfg := config.YouTubeConfig{
+		Enabled: true,
+		APIKey:  "key",
+		VideoID: "vid",
+	}
+	ch, err := NewYouTubeChannel(cfg, msgBus)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ch.config.ChatSource != "innertube" {
+		t.Errorf("expected default ChatSource 'innertube', got '%s'", ch.config.ChatSource)
+	}
 }

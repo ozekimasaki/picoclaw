@@ -310,22 +310,28 @@ type WeComAppConfig struct {
 }
 
 type YouTubeConfig struct {
-	Enabled             bool                `json:"enabled"                env:"PICOCLAW_CHANNELS_YOUTUBE_ENABLED"`
-	APIKey              string              `json:"api_key"               env:"PICOCLAW_CHANNELS_YOUTUBE_API_KEY"`
-	ChannelID           string              `json:"channel_id"            env:"PICOCLAW_CHANNELS_YOUTUBE_CHANNEL_ID"`
-	VideoID             string              `json:"video_id"              env:"PICOCLAW_CHANNELS_YOUTUBE_VIDEO_ID"`
-	PollIntervalSeconds int                 `json:"poll_interval_seconds" env:"PICOCLAW_CHANNELS_YOUTUBE_POLL_INTERVAL_SECONDS"`
-	ForwardChannel      string              `json:"forward_channel"       env:"PICOCLAW_CHANNELS_YOUTUBE_FORWARD_CHANNEL"`
-	ForwardChatID       string              `json:"forward_chat_id"       env:"PICOCLAW_CHANNELS_YOUTUBE_FORWARD_CHAT_ID"`
-	MessageFormat       string              `json:"message_format"        env:"PICOCLAW_CHANNELS_YOUTUBE_MESSAGE_FORMAT"`
-	AllowFrom           FlexibleStringSlice `json:"allow_from"            env:"PICOCLAW_CHANNELS_YOUTUBE_ALLOW_FROM"`
-	NGWords             []string            `json:"ng_words"              env:"PICOCLAW_CHANNELS_YOUTUBE_NG_WORDS"`
-	MinMessageLength    int                 `json:"min_message_length"    env:"PICOCLAW_CHANNELS_YOUTUBE_MIN_MESSAGE_LENGTH"`
-	MaxRepeatRatio      float64             `json:"max_repeat_ratio"      env:"PICOCLAW_CHANNELS_YOUTUBE_MAX_REPEAT_RATIO"`
-	BlockURLs           bool                `json:"block_urls"            env:"PICOCLAW_CHANNELS_YOUTUBE_BLOCK_URLS"`
-	MaxCommentsPerPoll  int                 `json:"max_comments_per_poll" env:"PICOCLAW_CHANNELS_YOUTUBE_MAX_COMMENTS_PER_POLL"`
-	SelectionStrategy   string              `json:"selection_strategy"    env:"PICOCLAW_CHANNELS_YOUTUBE_SELECTION_STRATEGY"`
-	BatchComments       bool                `json:"batch_comments"        env:"PICOCLAW_CHANNELS_YOUTUBE_BATCH_COMMENTS"`
+	Enabled              bool                `json:"enabled"                env:"PICOCLAW_CHANNELS_YOUTUBE_ENABLED"`
+	APIKey               string              `json:"api_key"               env:"PICOCLAW_CHANNELS_YOUTUBE_API_KEY"`
+	ChannelID            string              `json:"channel_id"            env:"PICOCLAW_CHANNELS_YOUTUBE_CHANNEL_ID"`
+	VideoID              string              `json:"video_id"              env:"PICOCLAW_CHANNELS_YOUTUBE_VIDEO_ID"`
+	LiveChatID           string              `json:"live_chat_id"          env:"PICOCLAW_CHANNELS_YOUTUBE_LIVE_CHAT_ID"`
+	PollIntervalSeconds  int                 `json:"poll_interval_seconds" env:"PICOCLAW_CHANNELS_YOUTUBE_POLL_INTERVAL_SECONDS"`
+	ForwardChannel       string              `json:"forward_channel"       env:"PICOCLAW_CHANNELS_YOUTUBE_FORWARD_CHANNEL"`
+	ForwardChatID        string              `json:"forward_chat_id"       env:"PICOCLAW_CHANNELS_YOUTUBE_FORWARD_CHAT_ID"`
+	MessageFormat        string              `json:"message_format"        env:"PICOCLAW_CHANNELS_YOUTUBE_MESSAGE_FORMAT"`
+	AllowFrom            FlexibleStringSlice `json:"allow_from"            env:"PICOCLAW_CHANNELS_YOUTUBE_ALLOW_FROM"`
+	NGWords              []string            `json:"ng_words"              env:"PICOCLAW_CHANNELS_YOUTUBE_NG_WORDS"`
+	MinMessageLength     int                 `json:"min_message_length"    env:"PICOCLAW_CHANNELS_YOUTUBE_MIN_MESSAGE_LENGTH"`
+	MaxRepeatRatio       float64             `json:"max_repeat_ratio"      env:"PICOCLAW_CHANNELS_YOUTUBE_MAX_REPEAT_RATIO"`
+	BlockURLs            bool                `json:"block_urls"            env:"PICOCLAW_CHANNELS_YOUTUBE_BLOCK_URLS"`
+	MaxCommentsPerPoll   int                 `json:"max_comments_per_poll" env:"PICOCLAW_CHANNELS_YOUTUBE_MAX_COMMENTS_PER_POLL"`
+	SelectionStrategy    string              `json:"selection_strategy"    env:"PICOCLAW_CHANNELS_YOUTUBE_SELECTION_STRATEGY"`
+	BatchComments        bool                `json:"batch_comments"         env:"PICOCLAW_CHANNELS_YOUTUBE_BATCH_COMMENTS"`
+	AccumulateComments   bool                `json:"accumulate_comments"    env:"PICOCLAW_CHANNELS_YOUTUBE_ACCUMULATE_COMMENTS"`
+	MinAccumulateSeconds int                 `json:"min_accumulate_seconds" env:"PICOCLAW_CHANNELS_YOUTUBE_MIN_ACCUMULATE_SECONDS"`
+	MaxAccumulateSeconds int                 `json:"max_accumulate_seconds" env:"PICOCLAW_CHANNELS_YOUTUBE_MAX_ACCUMULATE_SECONDS"`
+	ChatSource           string              `json:"chat_source"            env:"PICOCLAW_CHANNELS_YOUTUBE_CHAT_SOURCE"`
+	SuperchatPollSeconds int                 `json:"superchat_poll_seconds" env:"PICOCLAW_CHANNELS_YOUTUBE_SUPERCHAT_POLL_SECONDS"`
 }
 
 type AITuberConfig struct {

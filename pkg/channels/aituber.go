@@ -21,15 +21,17 @@ import (
 // Messages are sent with emotion tags and TTS completion callbacks control flow.
 type AITuberChannel struct {
 	*BaseChannel
-	config    config.AITuberConfig
-	upgrader  websocket.Upgrader
-	clients   map[*websocket.Conn]bool
-	clientsMu sync.RWMutex
-	server    *http.Server
-	ctx       context.Context
-	cancel    context.CancelFunc
-	sendQueue chan aituberMessage
-	ttsDone   chan struct{}
+	config       config.AITuberConfig
+	upgrader     websocket.Upgrader
+	clients      map[*websocket.Conn]bool
+	clientsMu    sync.RWMutex
+	server       *http.Server
+	ctx          context.Context
+	cancel       context.CancelFunc
+	sendQueue    chan aituberMessage
+	ttsDone      chan struct{}
+	ttsNotifyMu  sync.Mutex
+	ttsNotifiers []chan struct{}
 }
 
 type aituberMessage struct {
@@ -167,7 +169,7 @@ func (c *AITuberChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	c.clientsMu.Unlock()
 
 	logger.InfoCF("aituber", "Client connected", map[string]any{
-		"remote_addr":  r.RemoteAddr,
+		"remote_addr":   r.RemoteAddr,
 		"total_clients": clientCount,
 	})
 
@@ -214,10 +216,7 @@ func (c *AITuberChannel) readPump(conn *websocket.Conn) {
 		}
 		var event aituberEvent
 		if json.Unmarshal(message, &event) == nil && event.Type == "tts_complete" {
-			select {
-			case c.ttsDone <- struct{}{}:
-			default:
-			}
+			c.notifyTTSComplete()
 		}
 	}
 }
@@ -292,4 +291,33 @@ func parseEmotion(content, defaultEmotion string) (string, string) {
 		}
 	}
 	return content, defaultEmotion
+}
+
+// RegisterTTSNotify returns a channel that receives a signal when TTS completes.
+// The channel is pre-seeded so the first flush triggers after minAccumulate without waiting.
+func (c *AITuberChannel) RegisterTTSNotify() <-chan struct{} {
+	ch := make(chan struct{}, 1)
+	ch <- struct{}{} // pre-seed: initially ready (no TTS in progress)
+	c.ttsNotifyMu.Lock()
+	c.ttsNotifiers = append(c.ttsNotifiers, ch)
+	c.ttsNotifyMu.Unlock()
+	return ch
+}
+
+// notifyTTSComplete fans out TTS completion signal to sendWorker and external subscribers.
+func (c *AITuberChannel) notifyTTSComplete() {
+	// Existing sendWorker signal
+	select {
+	case c.ttsDone <- struct{}{}:
+	default:
+	}
+	// External subscribers (e.g. YouTube comment accumulator)
+	c.ttsNotifyMu.Lock()
+	for _, ch := range c.ttsNotifiers {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	c.ttsNotifyMu.Unlock()
 }

@@ -228,6 +228,19 @@ func (m *Manager) initChannels() error {
 		}
 	}
 
+	// Wire TTS signal: AITuber tts_complete → YouTube comment accumulator
+	if yt, ytOk := m.channels["youtube"]; ytOk {
+		if at, atOk := m.channels["aituber"]; atOk {
+			ytCh := yt.(*YouTubeChannel)
+			atCh := at.(*AITuberChannel)
+			if ytCh.config.AccumulateComments {
+				ttsReady := atCh.RegisterTTSNotify()
+				ytCh.SetTTSReady(ttsReady)
+				logger.InfoC("channels", "YouTube accumulator wired to AITuber TTS signal")
+			}
+		}
+	}
+
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{
 		"enabled_channels": len(m.channels),
 	})

@@ -156,7 +156,12 @@
       "block_urls": false,
       "max_comments_per_poll": 3,
       "selection_strategy": "latest",
-      "batch_comments": false
+      "batch_comments": false,
+      "accumulate_comments": true,
+      "min_accumulate_seconds": 3,
+      "max_accumulate_seconds": 30,
+      "chat_source": "innertube",
+      "superchat_poll_seconds": 120
     },
     "aituber": {
       "_comment": "AITuber Kit WebSocket server. AITuber Kit connects as client in external linkage mode.",
