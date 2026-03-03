@@ -1,0 +1,13 @@
+[Unit]
+Description=Xvfb virtual framebuffer
+After=network.target
+PartOf=chromium-kiosk.service
+
+[Service]
+User=may999
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x720x24 -ac
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=chromium-kiosk.service

@@ -1,48 +1,71 @@
 # Raspberry Pi 4 デプロイガイド
 
-PicoClaw + AITuber Kit を RPi 4 上でヘッドレスサーバーとして動かし、LAN 上の別 PC のブラウザからアクセスする構成です。
+RPi 4 (4GB) のみで PicoClaw + AITuber Kit (PNGTuber) を YouTube RTMP 配信する。OBS 不要、追加ハードウェア不要。
 
 ## 前提条件
 
 - Raspberry Pi 4 (4GB / 8GB)
-- Raspberry Pi OS Lite (64-bit) または Ubuntu Server 24.04 ARM64
-- Node.js 18+ (AITuber Kit 用)
-- Go 1.22+ (PicoClaw ビルド済みバイナリ使用なら不要)
+- Raspberry Pi OS (Debian Trixie, 64-bit)
+- Node.js 20 (AITuber Kit 用)
+- PicoClaw バイナリ (linux/arm64 クロスコンパイル済み)
 - LAN 接続済み
+- **Windows PC** — VOICEVOX Engine 用 (LAN 経由でアクセス)
 
 ## アーキテクチャ
 
 ```
-┌─ RPi 4 (ヘッドレス) ─────────────────────┐
-│                                           │
-│  PicoClaw gateway (systemd)               │
-│    ├─ YouTube Live Chat ポーリング         │
-│    ├─ LLM API 呼び出し (外部)              │
-│    └─ WebSocket Server (0.0.0.0:8000)     │
-│                                           │
-│  AITuber Kit (systemd / pm2)              │
-│    └─ Next.js (0.0.0.0:3000)              │
-│                                           │
-└───────────────┬───────────────────────────┘
-                │ LAN
-┌───────────────┴───────────────────────────┐
-│  別 PC ブラウザ                             │
-│  http://raspberrypi.local:3000            │
-│    └─ キャラクター描画 + TTS 再生           │
-│    └─ ws://raspberrypi.local:8000/ws      │
-└───────────────────────────────────────────┘
+┌─ Windows PC ──────────┐       ┌─ RPi 4 (4GB) ─────────────────────────┐
+│ VOICEVOX Engine       │       │                                        │
+│  --host 0.0.0.0       │       │ PicoClaw (Go)                   ~50MB │
+│  :50021               │◄─LAN─►│  ├─ YouTube Chat (InnerTube)          │
+│                       │       │  ├─ AITuber WS (localhost:8000)       │
+└───────────────────────┘       │  └─ sendWorker ← tts_complete 待ち    │
+                                │                                        │
+                                │ AITuber Kit (Next.js :3000)           │
+                                │  ├─ PNGTuber (Canvas 2D, no WebGL)    │
+                                │  ├─ /api/tts-voicevox → LAN VOICEVOX  │
+                                │  └─ tts_complete → WS                 │
+                                │                                 ~300MB │
+                                │ Xvfb :99 (1280x720x24)         ~10MB │
+                                │ Chromium (kiosk, --disable-gpu) ~600MB │
+                                │  └─ AudioContext → PipeWire            │
+                                │ PipeWire (null-sink)            ~20MB │
+                                │ ffmpeg (x11grab + pulse → RTMP) ~150MB │
+                                │                                        │
+                                │ 合計: ~1,130MB + OS ~350MB ≈ 1.5GB   │
+                                │ 空き: ~2.5GB ← swap 不要              │
+                                └────────────────────────────────────────┘
 ```
 
-## メモリバジェット（4GB モデル）
+## データフロー
+
+```
+YouTube Chat ─(InnerTube)→ PicoClaw preFilter → accumulate
+  → bus → LLM([emotion] text) → bus → YouTube.Send()
+  → forward_channel:"aituber" → AITuber sendQueue → sendWorker
+  → WS broadcast → Chromium (AITuber Kit)
+  → handleReceiveTextFromWsFn() → speakCharacter()
+  → /api/tts-voicevox (Next.js API route, server-side)
+  → VOICEVOX Engine (LAN) → audio WAV
+  → PNGTuberHandler.speak() → PNGTuberEngine.playAudioFromBuffer()
+  → AudioContext → [PipeWire null-sink] → [ffmpeg] → RTMP
+  → SpeakQueue.onSpeakCompletion → {"type":"tts_complete"} → WS → PicoClaw
+```
+
+## メモリバジェット（4GB モデル / 実測値）
 
 | プロセス | 想定メモリ |
 |---|---|
-| OS + systemd | ~300MB |
-| PicoClaw gateway | ~30-50MB |
-| Node.js (AITuber Kit) | ~150-250MB |
-| **合計** | **~0.5-0.6GB** |
+| OS + systemd | ~350MB |
+| PicoClaw gateway | ~50MB |
+| Node.js (AITuber Kit) | ~250MB |
+| Xvfb | ~10MB |
+| Chromium (kiosk) | ~600MB |
+| PipeWire | ~20MB |
+| ffmpeg | ~150MB |
+| **合計** | **~1.0GB (実測)** |
 
-残り 3.4GB+ が空くため、余裕があります。
+残り ~2.7GB → swap 不要。
 
 ---
 
@@ -161,12 +184,12 @@ nano ~/.picoclaw/workspace/SOUL.md
 ## Step 5: AITuber Kit のセットアップ
 
 ```bash
-# Node.js インストール (未インストールの場合)
+# Node.js 20 インストール (未インストールの場合)
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 
-# AITuber Kit をクローン (submodule として既にある場合はスキップ)
-cd /home/pi
+# AITuber Kit をクローン
+cd /home/may999
 git clone https://github.com/tegnike/aituber-kit.git
 cd aituber-kit
 
@@ -174,31 +197,26 @@ cd aituber-kit
 cat > .env.local << 'EOF'
 NEXT_PUBLIC_EXTERNAL_LINKAGE_MODE=true
 NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws
+NEXT_PUBLIC_MODEL_TYPE=pngtuber
+NEXT_PUBLIC_ALWAYS_OVERRIDE_WITH_ENV_VARIABLES=true
+NEXT_PUBLIC_SELECT_VOICE=voicevox
+NEXT_PUBLIC_SHOW_CONTROL_PANEL=false
+NEXT_PUBLIC_SHOW_ASSISTANT_TEXT=true
+NEXT_PUBLIC_SHOW_INTRODUCTION=false
+# サーバーサイドのみ（NEXT_PUBLIC_ 不要）
+VOICEVOX_SERVER_URL=http://<WINDOWS_IP>:50021
 EOF
 
 # 依存関係インストール & ビルド
 npm install
 npm run build
+
+# SIGILL ワークアラウンド (Cortex-A72 ARMv8.0)
+find node_modules -name "*.linux-arm64-gnu.node" -exec mv {} {}.bak \;
+find node_modules/canvas/build -name "canvas.node" -exec mv {} {}.bak \; 2>/dev/null
 ```
 
-> **注意**: `NEXT_PUBLIC_WS_URL` はブラウザから見た WebSocket URL です。  
-> ブラウザは別 PC 上で動くため、`localhost` ではなく RPi の IP またはホスト名を使います。  
-> ただし `NEXT_PUBLIC_*` はビルド時に埋め込まれるので、**ブラウザからアクセスする場合は RPi の IP を指定して再ビルド**が必要です。
-
-```bash
-# RPi の IP を確認
-hostname -I
-# 例: 192.168.1.50
-
-# 別 PC からアクセスする場合の .env.local
-cat > .env.local << 'EOF'
-NEXT_PUBLIC_EXTERNAL_LINKAGE_MODE=true
-NEXT_PUBLIC_WS_URL=ws://192.168.1.50:8000/ws
-EOF
-
-# 再ビルド
-npm run build
-```
+> **注意**: `npm install` 後は毎回 SIGILL ワークアラウンド（`.node` → `.node.bak` リネーム）が必要です。
 
 ## Step 6: systemd サービスの作成
 
@@ -399,6 +417,69 @@ cd /home/pi/aituber-kit
 PORT=3000 HOSTNAME=0.0.0.0 npm start
 ```
 
+## Step 7: 配信パイプラインのセットアップ
+
+配信に必要なパッケージとサービスを一括セットアップします。
+
+```bash
+# セットアップスクリプトを実行
+bash ~/scripts/rpi-stream/stream.sh setup
+```
+
+これにより以下が実行されます:
+1. Xvfb, Chromium, ffmpeg, PipeWire, フォント等のインストール
+2. PipeWire virtual_speaker シンク設定
+3. systemd サービスファイルの配置 (xvfb, chromium-kiosk, youtube-stream)
+4. `~/.config/stream.env` の配置
+5. `loginctl enable-linger` (PipeWire のブート時起動保証)
+
+### ストリームキーの設定
+
+```bash
+nano ~/.config/stream.env
+# YOUTUBE_STREAM_KEY=xxxx-xxxx-xxxx-xxxx を設定
+```
+
+### VOICEVOX Engine (Windows 側)
+
+```bash
+# VOICEVOX GUI は 127.0.0.1 でバインドするため、Engine を直接起動:
+"C:\Program Files\VOICEVOX\vv-engine\run.exe" --use_gpu --host 0.0.0.0 --port 50021
+
+# RPi から疎通確認
+curl -s http://<WINDOWS_IP>:50021/version
+```
+
+## Step 8: 配信の開始・停止
+
+```bash
+# 配信開始 (Xvfb + Chromium + ffmpeg → YouTube RTMP)
+bash ~/scripts/rpi-stream/stream.sh start
+
+# 配信停止
+bash ~/scripts/rpi-stream/stream.sh stop
+
+# 全サービス状態確認
+bash ~/scripts/rpi-stream/stream.sh status
+
+# Xvfb 画面キャプチャ（デバッグ用）
+bash ~/scripts/rpi-stream/stream.sh screenshot
+# → /tmp/screenshot.png を scp で取得
+
+# CDP 経由で JS 実行（初回ダイアログ閉じ等）
+python3 ~/scripts/rpi-stream/cdp_eval.py -f ~/scripts/rpi-stream/close_dialog.js
+```
+
+### systemd サービス一覧
+
+| サービス | 説明 | 依存関係 |
+|---|---|---|
+| `picoclaw` | PicoClaw gateway | — |
+| `aituber-kit` | AITuber Kit Next.js | — |
+| `xvfb` | 仮想フレームバッファ | network.target |
+| `chromium-kiosk` | Chromium キオスク | xvfb, aituber-kit, picoclaw |
+| `youtube-stream` | ffmpeg → YouTube RTMP | chromium-kiosk |
+
 ## 更新手順
 
 ```bash
@@ -408,12 +489,17 @@ sudo systemctl stop picoclaw
 sudo systemctl start picoclaw
 
 # AITuber Kit の更新
+bash ~/scripts/rpi-stream/stream.sh stop
 sudo systemctl stop aituber-kit
-cd /home/pi/aituber-kit
+cd ~/aituber-kit
 git pull
 npm install
 npm run build
+# SIGILL ワークアラウンド再適用
+find node_modules -name "*.linux-arm64-gnu.node" -exec mv {} {}.bak \;
+find node_modules/canvas/build -name "canvas.node" -exec mv {} {}.bak \; 2>/dev/null
 sudo systemctl start aituber-kit
+bash ~/scripts/rpi-stream/stream.sh start
 ```
 
 ## 自動起動の確認
@@ -425,4 +511,7 @@ sudo reboot
 # 再起動後
 systemctl is-active picoclaw      # → active
 systemctl is-active aituber-kit   # → active
+systemctl is-active xvfb          # → active
+systemctl is-active chromium-kiosk # → active
+systemctl is-active youtube-stream # → active
 ```

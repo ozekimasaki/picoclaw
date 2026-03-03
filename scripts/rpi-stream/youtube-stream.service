@@ -1,0 +1,28 @@
+[Unit]
+Description=YouTube RTMP stream via ffmpeg
+After=chromium-kiosk.service
+Requires=chromium-kiosk.service
+
+[Service]
+User=may999
+EnvironmentFile=/home/may999/.config/stream.env
+Environment=DISPLAY=:99
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStartPre=/bin/sleep 15
+ExecStart=/bin/bash -c '\
+  exec ffmpeg -nostdin -loglevel warning \
+    -f x11grab -video_size ${RESOLUTION:-1280x720} \
+    -framerate ${FPS:-30} -thread_queue_size 512 -i :99 \
+    -f pulse -thread_queue_size 512 -i virtual_speaker.monitor \
+    -vf format=yuv420p \
+    -c:v libx264 -preset ultrafast -tune zerolatency \
+    -b:v ${VIDEO_BITRATE:-4500k} -maxrate ${VIDEO_BITRATE:-4500k} -bufsize 9000k \
+    -g ${GOP:-60} -keyint_min ${GOP:-60} \
+    -threads 3 \
+    -c:a aac -b:a ${AUDIO_BITRATE:-128k} -ar 44100 \
+    -f flv "rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_STREAM_KEY}"'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

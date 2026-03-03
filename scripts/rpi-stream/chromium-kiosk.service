@@ -1,0 +1,32 @@
+[Unit]
+Description=Chromium kiosk for AITuber Kit
+After=xvfb.service aituber-kit.service picoclaw.service
+Requires=xvfb.service
+PartOf=youtube-stream.service
+
+[Service]
+User=may999
+Environment=DISPLAY=:99
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStartPre=/bin/bash -c 'pactl info >/dev/null 2>&1 || sleep 3; pactl list sinks short | grep -q virtual_speaker || pactl load-module module-null-sink sink_name=virtual_speaker sink_properties=device.description=Virtual_Speaker; pactl set-default-sink virtual_speaker'
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/bin/chromium \
+  --remote-debugging-port=9222 \
+  --kiosk \
+  --no-first-run \
+  --disable-infobars \
+  --disable-session-crashed-bubble \
+  --disable-gpu \
+  --disable-software-rasterizer \
+  --autoplay-policy=no-user-gesture-required \
+  --lang=ja \
+  --disable-features=Translate,TranslateUI \
+  --js-flags=--max-old-space-size=512 \
+  --window-size=1280,720 \
+  --user-data-dir=/home/may999/.chromium-kiosk \
+  http://localhost:3000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=youtube-stream.service
